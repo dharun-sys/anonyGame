@@ -50,26 +50,64 @@ export function rejoinRoom(
   roomId: string,
   displayName: string,
   newSocketId: string
-): { ok: boolean; reason?: string; player?: Player } {
+): { ok: boolean; reason?: string; player?: Player; gameState?: any } {
   const room = rooms.get(roomId);
   if (!room) return { ok: false, reason: 'Room not found' };
   const player = room.players.find((p) => p.displayName === displayName);
   if (!player) return { ok: false, reason: 'Player not found in room' };
+  
   const oldId = player.id;
+  
+  // Skip if already using this socket ID (duplicate reconnect)
+  if (oldId === newSocketId) {
+    return { ok: true, player };
+  }
+  
   player.id = newSocketId;
   player.connected = true;
+  
   // update hostId if this player was host
   if (room.hostId === oldId) room.hostId = newSocketId;
-  // update references in rounds
+  
+  // update references in rounds (including votes)
   for (const round of room.rounds) {
     if (round.targetPlayerId === oldId) round.targetPlayerId = newSocketId;
     if ((round as any).targetPlayerId2 === oldId) (round as any).targetPlayerId2 = newSocketId;
     if ((round as any).secretPhrasePlayerId === oldId) (round as any).secretPhrasePlayerId = newSocketId;
+    
+    // Update answer player IDs
     for (const ans of round.answers) {
       if (ans.playerId === oldId) ans.playerId = newSocketId;
     }
+    
+    // Update vote keys (voter IDs)
+    if (round.votes && round.votes[oldId] !== undefined) {
+      round.votes[newSocketId] = round.votes[oldId];
+      delete round.votes[oldId];
+    }
+    
+    // Update reaction player IDs in answers
+    for (const ans of round.answers) {
+      if (ans.reactions) {
+        for (const emoji of Object.keys(ans.reactions)) {
+          const idx = ans.reactions[emoji].indexOf(oldId);
+          if (idx >= 0) {
+            ans.reactions[emoji][idx] = newSocketId;
+          }
+        }
+      }
+    }
   }
-  return { ok: true, player };
+  
+  // Return current game state so client can restore view
+  const currentRound = room.rounds[room.currentRoundIndex];
+  const gameState = room.gameStarted ? {
+    gameStarted: true,
+    currentRoundIndex: room.currentRoundIndex,
+    phase: currentRound?.phase || 'answering',
+  } : null;
+  
+  return { ok: true, player, gameState };
 }
 
 export function leaveRoom(roomId: string, socketId: string) {

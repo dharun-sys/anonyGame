@@ -8,7 +8,18 @@ import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+
+// Socket.io with mobile-friendly settings
+const io = new Server(server, { 
+  cors: { origin: '*' },
+  // Longer timeouts for mobile connections
+  pingTimeout: 60000,      // 60 seconds before considering connection dead
+  pingInterval: 25000,     // Send ping every 25 seconds to keep connection alive
+  // Allow both transports for better mobile compatibility
+  transports: ['websocket', 'polling'],
+  // Increase buffer size for reconnection
+  maxHttpBufferSize: 1e6,
+});
 
 app.get('/', (_req, res) => res.send('Anonymous Party Game server'));
 
@@ -92,7 +103,68 @@ io.on('connection', (socket) => {
     if (!res.ok) return cb?.(res);
     socket.join(upper);
     broadcastRoomState(io, upper);
-    cb?.({ ok: true, roomId: upper });
+    
+    // Send current round state if game is in progress
+    const room = getRoom(upper);
+    if (room && room.gameStarted && room.rounds.length > 0) {
+      const r = room.rounds[room.currentRoundIndex];
+      if (r) {
+        const tName = room.players.find(p => p.id === r.targetPlayerId)?.displayName ?? '';
+        const tName2 = (r as any).targetPlayerId2 
+          ? room.players.find(p => p.id === (r as any).targetPlayerId2)?.displayName ?? '' 
+          : undefined;
+        
+        // Emit current round info to the rejoining player
+        socket.emit('new_round', {
+          roundIndex: room.currentRoundIndex,
+          totalRounds: room.rounds.length,
+          type: r.type,
+          questionText: (r as any).questionText || '',
+          targetPlayerId: r.targetPlayerId,
+          targetPlayerId2: (r as any).targetPlayerId2,
+          targetName: tName,
+          targetName2: tName2,
+          timeLimit: 0, // Timer already running on server
+          isSecretPhraseRound: r.type === 'secret_phrase',
+        });
+        
+        // If in reveal phase, send answers
+        if (r.phase === 'reveal' || r.phase === 'voting') {
+          const shuffled = r.answers.map(a => ({ 
+            answerId: a.answerId, 
+            text: a.text, 
+            reactions: a.reactions || {} 
+          }));
+          socket.emit('reveal_answers', { answers: shuffled, type: r.type, revealTime: 0 });
+        }
+        
+        // If in voting phase, send voting info
+        if (r.phase === 'voting') {
+          const pl = room.players.map(p => ({ id: p.id, displayName: p.displayName }));
+          const voteType = r.type === 'secret_phrase' ? 'secret_phrase' : r.type;
+          socket.emit('voting_phase', { 
+            type: voteType, 
+            targetPlayerId: r.targetPlayerId, 
+            targetPlayerId2: (r as any).targetPlayerId2, 
+            answers: r.answers.map(a => ({ answerId: a.answerId, text: a.text, reactions: a.reactions || {} })),
+            players: pl, 
+            voteTimeLimit: 0 
+          });
+        }
+        
+        // Resend secret phrase assignment if applicable
+        if (r.type === 'secret_phrase' && (r as any).secretPhrasePlayerId === socket.id && (r as any).secretPhrase) {
+          socket.emit('secret_phrase_assignment', { phrase: (r as any).secretPhrase });
+        }
+        
+        // Resend lie detection target status
+        if (r.type === 'lie_detection' && r.targetPlayerId === socket.id) {
+          socket.emit('lie_detection_target', { message: 'Write your REAL answer – others will try to fake it!' });
+        }
+      }
+    }
+    
+    cb?.({ ok: true, roomId: upper, gameState: res.gameState });
   });
 
   /* ── HOST CONTROLS ── */
