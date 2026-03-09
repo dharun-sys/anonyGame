@@ -194,11 +194,18 @@ export function submitAnswer(io: Server, roomId: string, answer: Answer) {
    ANSWER PHASE END → REVEAL
    ================================================================ */
 function answerEnd(io: Server, roomId: string) {
+  console.log(`[answerEnd] roomId=${roomId}`);
   clearAll(roomId);
   const room = getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    console.error(`[answerEnd] Room not found: ${roomId}`);
+    return;
+  }
   const r = room.rounds[room.currentRoundIndex];
-  if (!r) return;
+  if (!r) {
+    console.error(`[answerEnd] Round not found: ${roomId}, index=${room.currentRoundIndex}`);
+    return;
+  }
 
   if (r.answers.length === 0) {
     io.to(roomId).emit('round_skipped', { reason: 'No answers were submitted' });
@@ -209,6 +216,7 @@ function answerEnd(io: Server, roomId: string) {
 
   r.phase = 'reveal';
   const rt = getRevealTime(room.players.length);
+  console.log(`[answerEnd] Starting reveal phase for ${roomId}, duration=${rt}s`);
   const shuffled = shuffle(r.answers.map(a => ({ answerId: a.answerId, text: a.text, reactions: a.reactions || {} })));
   io.to(roomId).emit('reveal_answers', { answers: shuffled, type: r.type, revealTime: rt });
   timers.set(roomId + ':t', setTimeout(() => startVotingPhase(io, roomId), rt * 1000));
@@ -255,12 +263,20 @@ export function reactToAnswer(io: Server, roomId: string, playerId: string, answ
    VOTING PHASE
    ================================================================ */
 function startVotingPhase(io: Server, roomId: string) {
+  console.log(`[startVotingPhase] roomId=${roomId}`);
   clearAll(roomId);
   const room = getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    console.error(`[startVotingPhase] Room not found: ${roomId}`);
+    return;
+  }
   const r = room.rounds[room.currentRoundIndex];
-  if (!r) return;
+  if (!r) {
+    console.error(`[startVotingPhase] Round not found: ${roomId}, index=${room.currentRoundIndex}`);
+    return;
+  }
   r.phase = 'voting';
+  console.log(`[startVotingPhase] Emitting voting_phase for ${roomId}, players=${room.players.length}`);
 
   // crowd favorite
   let maxR = 0; let cfId: string | null = null;

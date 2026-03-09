@@ -43,8 +43,13 @@ export default function RoomView() {
   const navigate = useNavigate();
   const roomId = urlRoomId?.toUpperCase() || '';
 
-  const [view, setView] = useState<View>('joining');
-  const [_displayName, setDisplayName] = useState('');
+  // Check if we're coming from Lobby (already joined)
+  const savedName = sessionStorage.getItem('anony_displayName');
+  const savedRoom = sessionStorage.getItem('anony_roomId');
+  const alreadyJoined = savedName && savedRoom === roomId;
+
+  const [view, setView] = useState<View>(alreadyJoined ? 'waiting' : 'joining');
+  const [_displayName, setDisplayName] = useState(alreadyJoined ? savedName : '');
   const [nameInput, setNameInput] = useState('');
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [round, setRound] = useState<RoundData | null>(null);
@@ -71,17 +76,29 @@ export default function RoomView() {
   // connection status for mobile
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [isReconnecting, setIsReconnecting] = useState(false);
-  const [hasJoined, setHasJoined] = useState(false); // Track if we've successfully joined
+  const [hasJoined, setHasJoined] = useState(alreadyJoined); // Track if we've successfully joined
 
-  /* ── auto-rejoin on mount AND on reconnect ── */
+  /* ── auto-rejoin on reconnect ONLY (not on initial mount from Lobby) ── */
   useEffect(() => {
-    const attemptRejoin = () => {
+    // Track if this is the initial mount - we use a ref to avoid re-triggering
+    let isInitialMount = true;
+    
+    const attemptRejoin = (isReconnect: boolean) => {
       const savedName = sessionStorage.getItem('anony_displayName');
       const savedRoom = sessionStorage.getItem('anony_roomId');
       
-      // Only attempt rejoin if we have saved credentials for THIS room
+      // Only attempt rejoin if:
+      // 1. We have saved credentials for THIS room
+      // 2. This is a reconnect (socket disconnect/reconnect), NOT initial mount from Lobby
       if (savedName && savedRoom === roomId) {
-        console.log('[RoomView] Attempting rejoin:', { roomId, savedName, socketId: socket.id });
+        // If this is initial mount and we're already in the room (came from Lobby), skip rejoin
+        if (isInitialMount && alreadyJoined && !isReconnect) {
+          console.log('[RoomView] Skipping rejoin on mount - already joined from Lobby');
+          isInitialMount = false;
+          return;
+        }
+        
+        console.log('[RoomView] Attempting rejoin:', { roomId, savedName, socketId: socket.id, isReconnect });
         
         socket.emit('rejoin_room', { roomId, displayName: savedName }, (res: any) => {
           console.log('[RoomView] Rejoin response:', res);
@@ -92,6 +109,12 @@ export default function RoomView() {
             setIsReconnecting(false);
             setError('');
             // View will be set by incoming events (room_state, new_round, etc.)
+          } else if (res?.reason === 'Already in room') {
+            // This is fine - we're already in the room
+            console.log('[RoomView] Already in room, continuing...');
+            setHasJoined(true);
+            setIsReconnecting(false);
+            setError('');
           } else {
             console.warn('[RoomView] Rejoin failed:', res?.reason);
             // Only show error if we thought we were in a game
@@ -103,16 +126,21 @@ export default function RoomView() {
             if (res?.reason === 'Room not found') {
               sessionStorage.removeItem('anony_roomId');
               sessionStorage.removeItem('anony_displayName');
+              setHasJoined(false);
               setView('joining');
             }
           }
         });
       }
+      
+      isInitialMount = false;
     };
 
-    // Initial rejoin attempt on mount
-    if (socket.connected) {
-      attemptRejoin();
+    // Only attempt rejoin on mount if this is a page refresh (not coming from Lobby)
+    // We detect this by checking if socket was already connected when component mounted
+    if (socket.connected && !alreadyJoined) {
+      // This is likely a direct URL access or refresh - try to rejoin
+      attemptRejoin(false);
     }
 
     // Handle reconnection events
@@ -120,8 +148,8 @@ export default function RoomView() {
       console.log('[RoomView] Socket connected:', socket.id);
       setIsConnected(true);
       setIsReconnecting(false);
-      // Small delay to ensure server is ready
-      setTimeout(attemptRejoin, 100);
+      // This is a reconnect - always attempt rejoin
+      setTimeout(() => attemptRejoin(true), 100);
     };
 
     const onDisconnect = (reason: string) => {

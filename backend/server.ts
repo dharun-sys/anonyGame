@@ -180,6 +180,7 @@ io.on('connection', (socket) => {
     const { roomId } = payload || {};
     const room = getRoom(roomId);
     if (!room || room.hostId !== socket.id) return;
+    console.log(`[end_game] Host ${socket.id} ending room ${roomId}`);
     io.to(roomId).emit('room_ended');
     io.in(roomId).socketsLeave(roomId);
     deleteRoom(roomId);
@@ -187,7 +188,8 @@ io.on('connection', (socket) => {
 
   /* ── DISCONNECT ── */
 
-  socket.on('disconnecting', () => {
+  socket.on('disconnecting', (reason) => {
+    console.log(`[disconnecting] socket=${socket.id}, reason=${reason}, rooms=${[...socket.rooms].join(',')}`);
     for (const roomId of socket.rooms) {
       if (roomId === socket.id) continue;
       leaveRoom(roomId, socket.id);
