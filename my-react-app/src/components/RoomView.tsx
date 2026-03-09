@@ -71,58 +71,87 @@ export default function RoomView() {
   // connection status for mobile
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [hasJoined, setHasJoined] = useState(false); // Track if we've successfully joined
 
   /* ── auto-rejoin on mount AND on reconnect ── */
   useEffect(() => {
     const attemptRejoin = () => {
       const savedName = sessionStorage.getItem('anony_displayName');
       const savedRoom = sessionStorage.getItem('anony_roomId');
+      
+      // Only attempt rejoin if we have saved credentials for THIS room
       if (savedName && savedRoom === roomId) {
+        console.log('[RoomView] Attempting rejoin:', { roomId, savedName, socketId: socket.id });
+        
         socket.emit('rejoin_room', { roomId, displayName: savedName }, (res: any) => {
+          console.log('[RoomView] Rejoin response:', res);
+          
           if (res?.ok) {
             setDisplayName(savedName);
-            // Don't reset view if we're mid-game, let room_state handle it
-            if (view === 'joining') setView('waiting');
+            setHasJoined(true);
             setIsReconnecting(false);
+            setError('');
+            // View will be set by incoming events (room_state, new_round, etc.)
           } else {
-            // Room may have been deleted
-            setError(res?.reason || 'Failed to rejoin');
+            console.warn('[RoomView] Rejoin failed:', res?.reason);
+            // Only show error if we thought we were in a game
+            if (hasJoined || view !== 'joining') {
+              setError(res?.reason || 'Connection lost. Please rejoin.');
+            }
             setIsReconnecting(false);
+            // Clear saved data if room doesn't exist
+            if (res?.reason === 'Room not found') {
+              sessionStorage.removeItem('anony_roomId');
+              sessionStorage.removeItem('anony_displayName');
+              setView('joining');
+            }
           }
         });
       }
     };
 
-    // Initial rejoin attempt
+    // Initial rejoin attempt on mount
     if (socket.connected) {
       attemptRejoin();
     }
 
     // Handle reconnection events
     const onConnect = () => {
+      console.log('[RoomView] Socket connected:', socket.id);
       setIsConnected(true);
       setIsReconnecting(false);
-      attemptRejoin();
+      // Small delay to ensure server is ready
+      setTimeout(attemptRejoin, 100);
     };
 
-    const onDisconnect = () => {
+    const onDisconnect = (reason: string) => {
+      console.log('[RoomView] Socket disconnected:', reason);
       setIsConnected(false);
+      // Don't clear hasJoined - we want to attempt rejoin
     };
 
-    const onReconnectAttempt = () => {
+    const onReconnectAttempt = (attempt: number) => {
+      console.log('[RoomView] Reconnect attempt:', attempt);
       setIsReconnecting(true);
+    };
+
+    const onConnectError = (err: Error) => {
+      console.error('[RoomView] Connection error:', err.message);
+      setError('Connection error. Retrying...');
     };
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', onConnectError);
     socket.io.on('reconnect_attempt', onReconnectAttempt);
 
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
+      socket.off('connect_error', onConnectError);
       socket.io.off('reconnect_attempt', onReconnectAttempt);
     };
-  }, [roomId, view]);
+  }, [roomId, hasJoined, view]);
 
   /* ── socket listeners ── */
   useEffect(() => {
@@ -220,9 +249,11 @@ export default function RoomView() {
     socket.emit('join_room', { roomId, displayName: nameInput.trim() }, (res: any) => {
       if (res?.ok) {
         setDisplayName(nameInput.trim());
+        setHasJoined(true);
         sessionStorage.setItem('anony_roomId', roomId);
         sessionStorage.setItem('anony_displayName', nameInput.trim());
         setView('waiting');
+        setError('');
       } else setError(res?.reason || 'Failed to join');
     });
   };
