@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import { socket } from '../socket';
 
 interface Props {
@@ -13,15 +13,11 @@ interface Props {
 
 export default function Vote({ answers, isTarget, onVote, voteType, players, timeLeft }: Props) {
   const [voted, setVoted] = useState(false);
-  const [voting, setVoting] = useState(false); // Prevent double-tap on mobile
 
-  // Use useCallback to prevent re-renders and improve touch handling
-  const handleVote = useCallback((val: string) => {
-    if (voted || voting) return; // Prevent double-tap
-    setVoting(true);
+  function handleVote(val: string) {
     onVote(val);
     setVoted(true);
-  }, [voted, voting, onVote]);
+  }
 
   const canVote =
     voteType === 'secret_phrase' ? isTarget :
@@ -145,14 +141,9 @@ const cardItem: React.CSSProperties = {
 };
 const ansNum: React.CSSProperties = { color: 'var(--accent-light)', fontWeight: 700, marginRight: 6 };
 const voteBtn: React.CSSProperties = {
-  padding: '12px 20px', fontSize: 14, fontWeight: 600, borderRadius: 10,
+  padding: '8px 18px', fontSize: 14, fontWeight: 600, borderRadius: 10,
   border: 'none', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap',
   background: 'linear-gradient(135deg, var(--accent), #6366f1)',
   boxShadow: '0 2px 8px var(--accent-glow)',
   flexShrink: 0,
-  minHeight: 44, // Minimum touch target for mobile
-  minWidth: 80,
-  touchAction: 'manipulation', // Prevent double-tap zoom on mobile
-  WebkitTapHighlightColor: 'transparent', // Remove tap highlight on iOS
-  userSelect: 'none', // Prevent text selection
 };
