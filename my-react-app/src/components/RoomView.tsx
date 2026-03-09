@@ -68,17 +68,61 @@ export default function RoomView() {
   const [memeChain, setMemeChain] = useState<any>(null);
   const [memeChainTurn, setMemeChainTurn] = useState<any>(null);
   const [memeChainVoting, setMemeChainVoting] = useState(false);
+  // connection status for mobile
+  const [isConnected, setIsConnected] = useState(socket.connected);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
-  /* ── auto-rejoin on mount ── */
+  /* ── auto-rejoin on mount AND on reconnect ── */
   useEffect(() => {
-    const savedName = sessionStorage.getItem('anony_displayName');
-    const savedRoom = sessionStorage.getItem('anony_roomId');
-    if (savedName && savedRoom === roomId) {
-      socket.emit('rejoin_room', { roomId, displayName: savedName }, (res: any) => {
-        if (res?.ok) { setDisplayName(savedName); setView('waiting'); }
-      });
+    const attemptRejoin = () => {
+      const savedName = sessionStorage.getItem('anony_displayName');
+      const savedRoom = sessionStorage.getItem('anony_roomId');
+      if (savedName && savedRoom === roomId) {
+        socket.emit('rejoin_room', { roomId, displayName: savedName }, (res: any) => {
+          if (res?.ok) {
+            setDisplayName(savedName);
+            // Don't reset view if we're mid-game, let room_state handle it
+            if (view === 'joining') setView('waiting');
+            setIsReconnecting(false);
+          } else {
+            // Room may have been deleted
+            setError(res?.reason || 'Failed to rejoin');
+            setIsReconnecting(false);
+          }
+        });
+      }
+    };
+
+    // Initial rejoin attempt
+    if (socket.connected) {
+      attemptRejoin();
     }
-  }, [roomId]);
+
+    // Handle reconnection events
+    const onConnect = () => {
+      setIsConnected(true);
+      setIsReconnecting(false);
+      attemptRejoin();
+    };
+
+    const onDisconnect = () => {
+      setIsConnected(false);
+    };
+
+    const onReconnectAttempt = () => {
+      setIsReconnecting(true);
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.io.on('reconnect_attempt', onReconnectAttempt);
+
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.io.off('reconnect_attempt', onReconnectAttempt);
+    };
+  }, [roomId, view]);
 
   /* ── socket listeners ── */
   useEffect(() => {
@@ -185,7 +229,16 @@ export default function RoomView() {
 
   const doStartGame = (mode?: string) => socket.emit('start_game', { roomId, mode });
   const doSubmit = (text: string) => { socket.emit('submit_answer', { roomId, text }); setSubmitted(true); };
-  const doVote = (value: string) => socket.emit('vote_answer', { roomId, answerId: value, value });
+  
+  // Improved vote handler with connection check
+  const doVote = (value: string) => {
+    if (!socket.connected) {
+      setError('Connection lost. Reconnecting...');
+      return;
+    }
+    socket.emit('vote_answer', { roomId, answerId: value, value });
+  };
+  
   const doReact = (answerId: string, emoji: string) => socket.emit('react_answer', { roomId, answerId, emoji });
   const doRestart = () => socket.emit('restart_game', { roomId });
   const doEndGame = () => socket.emit('end_game', { roomId });
@@ -194,10 +247,18 @@ export default function RoomView() {
 
   const isHost = roomState?.hostId === socket.id;
 
+  /* ── CONNECTION BANNER (for mobile) ── */
+  const connectionBanner = !isConnected ? (
+    <div style={disconnectedBanner}>
+      {isReconnecting ? '🔄 Reconnecting...' : '⚠️ Disconnected — trying to reconnect...'}
+    </div>
+  ) : null;
+
   /* ── JOINING ── */
   if (view === 'joining') {
     return (
       <div style={pageCenter}>
+        {connectionBanner}
         <div style={glassCard}>
           <div style={{ fontSize: 40, marginBottom: 8, animation: 'float 3s ease infinite' }}>🎭</div>
           <h2 style={headingGrad}>Join Room</h2>
@@ -222,6 +283,7 @@ export default function RoomView() {
   if (view === 'meme_chain') {
     return (
       <div style={mainWrap}>
+        {connectionBanner}
         <MemeChain
           chain={memeChain?.chain || []}
           prompt={memeChain?.prompt || ''}
@@ -238,6 +300,9 @@ export default function RoomView() {
   /* ── MAIN ROOM VIEW ── */
   return (
     <div style={mainWrap}>
+      {/* CONNECTION STATUS BANNER */}
+      {connectionBanner}
+
       {/* HEADER — only show during active gameplay, not in waiting lobby */}
       {view !== 'waiting' && (
         <header style={headerStyle}>
@@ -535,4 +600,10 @@ const voteCountRow: React.CSSProperties = {
 const voteBadge: React.CSSProperties = {
   background: 'var(--accent)', color: '#fff', fontSize: 12, fontWeight: 700,
   padding: '2px 10px', borderRadius: 20,
+};
+const disconnectedBanner: React.CSSProperties = {
+  background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.3)',
+  color: '#f87171', padding: '10px 16px', borderRadius: 12,
+  marginBottom: 12, textAlign: 'center', fontWeight: 600, fontSize: 14,
+  animation: 'slideDown 0.3s ease',
 };
