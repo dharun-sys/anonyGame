@@ -1,0 +1,7 @@
+/* App.css — minimal, most styles are component-level */
+#root {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 16px;
+  text-align: center;
+}
